@@ -25,9 +25,8 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
     private const int ToggleHotkeyId = 1;
     private const int QuitHotkeyId = 2;
 
-    private const byte VK_SHIFT = 0x10;
+    private const byte VK_LSHIFT = 0xA0;
     private const byte VK_W = 0x57;
-    private const uint KEYEVENTF_KEYUP = 0x0002;
 
     private bool holding;
 
@@ -60,15 +59,15 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
     {
         if (holding)
         {
-            keybd_event(VK_W, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-            keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            SendKey(VK_W, keyDown: false);
+            SendKey(VK_LSHIFT, keyDown: false);
             holding = false;
             Console.WriteLine("AutoRun: OFF");
         }
         else
         {
-            keybd_event(VK_SHIFT, 0, 0, UIntPtr.Zero);
-            keybd_event(VK_W, 0, 0, UIntPtr.Zero);
+            SendKey(VK_LSHIFT, keyDown: true);
+            SendKey(VK_W, keyDown: true);
             holding = true;
             Console.WriteLine("AutoRun: ON  (holding Shift+W)");
         }
@@ -78,8 +77,8 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
     {
         if (holding)
         {
-            keybd_event(VK_W, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-            keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            SendKey(VK_W, keyDown: false);
+            SendKey(VK_LSHIFT, keyDown: false);
         }
 
         Console.WriteLine();
@@ -94,6 +93,30 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
         DestroyHandle();
     }
 
+    // Sends a real hardware scan code via SendInput rather than a synthetic
+    // virtual-key event (keybd_event), because most games poll raw scan
+    // codes through DirectInput and never see keybd_event's key state.
+    private static void SendKey(byte vk, bool keyDown)
+    {
+        ushort scan = (ushort)MapVirtualKey(vk, MAPVK_VK_TO_VSC);
+        var input = new INPUT
+        {
+            type = INPUT_KEYBOARD,
+            u = new InputUnion
+            {
+                ki = new KEYBDINPUT
+                {
+                    wVk = 0,
+                    wScan = scan,
+                    dwFlags = KEYEVENTF_SCANCODE | (keyDown ? 0 : KEYEVENTF_KEYUP),
+                    time = 0,
+                    dwExtraInfo = IntPtr.Zero,
+                },
+            },
+        };
+        SendInput(1, new[] { input }, Marshal.SizeOf<INPUT>());
+    }
+
     [DllImport("user32.dll")]
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
@@ -101,5 +124,37 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
     private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     [DllImport("user32.dll")]
-    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    private static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    private const uint MAPVK_VK_TO_VSC = 0;
+    private const uint INPUT_KEYBOARD = 1;
+    private const uint KEYEVENTF_SCANCODE = 0x0008;
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public uint type;
+        public InputUnion u;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct InputUnion
+    {
+        [FieldOffset(0)]
+        public KEYBDINPUT ki;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
 }
