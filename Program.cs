@@ -141,7 +141,11 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
         public InputUnion u;
     }
 
-    [StructLayout(LayoutKind.Explicit)]
+    // Size must be 32 on x64 (the padded size of the native union's largest
+    // member, MOUSEINPUT) even though only KEYBDINPUT is used here.
+    // Without it .NET sizes the union at 24 bytes, making INPUT 32 bytes
+    // instead of the real 40, and SendInput silently rejects the whole call.
+    [StructLayout(LayoutKind.Explicit, Size = 32)]
     private struct InputUnion
     {
         [FieldOffset(0)]
