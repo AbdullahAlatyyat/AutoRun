@@ -1,12 +1,13 @@
 # AutoRun
 
 Press a hotkey to hold down **Shift + W**; press it again to release. Press
-another hotkey to quit.
+another hotkey to quit. Pressing any other real key while the hold is
+active releases it automatically, so it never fights with your own input.
 
 - Toggle hold: `F6`
 - Quit: `F7`
 
-Edit `ToggleKey`, `QuitKey`, or the held keys (`VK_SHIFT`, `VK_W`) in
+Edit `ToggleKey`, `QuitKey`, or the held keys (`VK_LSHIFT`, `VK_W`) in
 `Program.cs` to change them.
 
 ## Requirements

@@ -10,6 +10,7 @@ internal static class Program
         Console.WriteLine("AutoRun is running.");
         Console.WriteLine($"  Press [{HotkeyWindow.ToggleKey}] to toggle holding Shift+W.");
         Console.WriteLine($"  Press [{HotkeyWindow.QuitKey}] to quit.");
+        Console.WriteLine("  Any other real key press releases the hold automatically.");
 
         using var window = new HotkeyWindow();
         Application.Run();
@@ -28,13 +29,25 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
     private const byte VK_LSHIFT = 0xA0;
     private const byte VK_W = 0x57;
 
+    private const int WH_KEYBOARD_LL = 13;
+    private const int WM_KEYDOWN = 0x0100;
+    private const int WM_SYSKEYDOWN = 0x0104;
+    private const uint LLKHF_INJECTED = 0x00000010;
+
     private bool holding;
+    private readonly LowLevelKeyboardProc keyboardHookProc;
+    private readonly IntPtr keyboardHookHandle;
 
     public HotkeyWindow()
     {
         CreateHandle(new CreateParams());
         RegisterHotKey(Handle, ToggleHotkeyId, 0, (uint)ToggleKey);
         RegisterHotKey(Handle, QuitHotkeyId, 0, (uint)QuitKey);
+
+        // Kept as a field so the delegate isn't garbage-collected while the
+        // unmanaged hook still holds a reference to it.
+        keyboardHookProc = KeyboardHookCallback;
+        keyboardHookHandle = SetWindowsHookEx(WH_KEYBOARD_LL, keyboardHookProc, GetModuleHandle(null), 0);
     }
 
     protected override void WndProc(ref Message m)
@@ -55,32 +68,66 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
         base.WndProc(ref m);
     }
 
+    // Detects real (non-injected) key presses so a manual keystroke can
+    // cancel the held Shift+W and hand control back to the player. The
+    // low-level hook flags our own SendInput-generated presses as
+    // "injected", so they're ignored here and never self-cancel.
+    private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode >= 0 && holding)
+        {
+            int message = wParam.ToInt32();
+            if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN)
+            {
+                var data = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
+                bool injected = (data.flags & LLKHF_INJECTED) != 0;
+                var key = (Keys)data.vkCode;
+                if (!injected && key != ToggleKey && key != QuitKey)
+                {
+                    StopHold("manual input detected");
+                }
+            }
+        }
+
+        return CallNextHookEx(keyboardHookHandle, nCode, wParam, lParam);
+    }
+
     private void Toggle()
     {
         if (holding)
         {
-            SendKey(VK_W, keyDown: false);
-            SendKey(VK_LSHIFT, keyDown: false);
-            holding = false;
-            Console.WriteLine("AutoRun: OFF");
+            StopHold();
         }
         else
         {
-            SendKey(VK_LSHIFT, keyDown: true);
-            SendKey(VK_W, keyDown: true);
-            holding = true;
-            Console.WriteLine("AutoRun: ON  (holding Shift+W)");
+            StartHold();
         }
+    }
+
+    private void StartHold()
+    {
+        SendKey(VK_LSHIFT, keyDown: true);
+        SendKey(VK_W, keyDown: true);
+        holding = true;
+        Console.WriteLine("AutoRun: ON  (holding Shift+W)");
+    }
+
+    private void StopHold(string? reason = null)
+    {
+        if (!holding)
+        {
+            return;
+        }
+
+        SendKey(VK_W, keyDown: false);
+        SendKey(VK_LSHIFT, keyDown: false);
+        holding = false;
+        Console.WriteLine(reason is null ? "AutoRun: OFF" : $"AutoRun: OFF ({reason})");
     }
 
     private void Quit()
     {
-        if (holding)
-        {
-            SendKey(VK_W, keyDown: false);
-            SendKey(VK_LSHIFT, keyDown: false);
-        }
-
+        StopHold();
         Console.WriteLine();
         Console.WriteLine("AutoRun: exiting");
         Application.Exit();
@@ -88,6 +135,7 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
 
     public void Dispose()
     {
+        UnhookWindowsHookEx(keyboardHookHandle);
         UnregisterHotKey(Handle, ToggleHotkeyId);
         UnregisterHotKey(Handle, QuitHotkeyId);
         DestroyHandle();
@@ -117,6 +165,8 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
         SendInput(1, new[] { input }, Marshal.SizeOf<INPUT>());
     }
 
+    private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
     [DllImport("user32.dll")]
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
@@ -128,6 +178,19 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
+    private static extern IntPtr GetModuleHandle(string? lpModuleName);
 
     private const uint MAPVK_VK_TO_VSC = 0;
     private const uint INPUT_KEYBOARD = 1;
@@ -158,6 +221,16 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
         public ushort wVk;
         public ushort wScan;
         public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KBDLLHOOKSTRUCT
+    {
+        public uint vkCode;
+        public uint scanCode;
+        public uint flags;
         public uint time;
         public IntPtr dwExtraInfo;
     }
