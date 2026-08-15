@@ -6,30 +6,28 @@ another hotkey to quit.
 - Toggle hold: `F6`
 - Quit: `F7`
 
-Edit `TOGGLE_HOTKEY`, `QUIT_HOTKEY`, or `HELD_KEYS` at the top of `main.py`
-to change the keys.
+Edit `ToggleKey`, `QuitKey`, or the held keys (`VK_SHIFT`, `VK_W`) in
+`Program.cs` to change them.
 
 ## Requirements
 
 - Windows
-- Python 3.8+
+- .NET 8 SDK
 
 ## Run
 
 ```
-pip install -r requirements.txt
-python main.py
+dotnet run
 ```
 
 Run as Administrator if the hotkey doesn't work in a game running as admin
-(the `keyboard` library needs matching privilege level to inject keys into
-elevated windows).
+(Windows blocks lower-privilege processes from sending input to
+higher-privilege windows).
 
-## Build a standalone .exe (optional)
+## Build a standalone .exe
 
 ```
-pip install pyinstaller
-pyinstaller --onefile main.py
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
 
-The executable will be in `dist/main.exe`.
+The executable will be in `bin/Release/net8.0-windows/win-x64/publish/AutoRun.exe`.
